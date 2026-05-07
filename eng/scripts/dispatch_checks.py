@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import glob
 import os
 import sys
 import time
@@ -15,6 +16,7 @@ from ci_tools.variables import in_ci
 from ci_tools.scenario.generation import build_whl_for_req, replace_dev_reqs
 from ci_tools.logging import configure_logging, logger
 from ci_tools.environment_exclusions import is_check_enabled, CHECK_DEFAULTS
+from ci_tools.parsing import get_config_setting
 from devtools_testutils.proxy_startup import prepare_local_tool
 from packaging.requirements import Requirement
 
@@ -43,7 +45,16 @@ PROXY_STATUS_SUFFIX = "/Info/Available"
 PROXY_STARTUP_TIMEOUT = 60
 BASE_PROXY_PORT = 5050
 # Checks implemented via InstallAndTest all require shared recording restore behavior.
-INSTALL_AND_TEST_CHECKS = {"whl", "whl_no_aio", "sdist", "devtest", "optional", "latestdependency", "mindependency"}
+INSTALL_AND_TEST_CHECKS = {
+    "whl",
+    "whl_no_aio",
+    "sdist",
+    "devtest",
+    "optional",
+    "import_all",
+    "latestdependency",
+    "mindependency",
+}
 SHARED_RESTORE_ENV = "__shared_restore__"
 
 
@@ -125,6 +136,9 @@ async def run_check(
     total: int,
     proxy_port: int,
     mark_arg: Optional[str],
+    dest_dir: Optional[str] = None,
+    service: Optional[str] = None,
+    python_version: Optional[str] = None,
 ) -> CheckResult:
     """Run a single check (subprocess) within a concurrency semaphore, capturing output and timing.
 
@@ -148,8 +162,14 @@ async def run_check(
     async with semaphore:
         start = time.time()
         cmd = base_args + [check, "--isolate", package]
+        if python_version:
+            cmd += ["--python", python_version]
+        if service:
+            cmd += ["--service", service]
         if mark_arg:
             cmd += ["--mark_arg", mark_arg]
+        if dest_dir and check == "apistub":
+            cmd += ["--dest-dir", dest_dir]
         logger.info(f"[START {idx}/{total}] {check} :: {package}\nCMD: {' '.join(cmd)}")
         env = os.environ.copy()
         env["PROXY_URL"] = f"http://localhost:{proxy_port}"
@@ -199,8 +219,10 @@ async def run_check(
         # finally, we need to clean up any temp dirs created by --isolate
         if in_ci():
             package_name = os.path.basename(os.path.normpath(package))
-            isolate_dir = os.path.join(root_dir, ".venv", package_name, f".venv_{check}")
-            ISOLATE_DIRS_TO_CLEAN.append(isolate_dir)
+            venv_pkg_root = os.path.join(root_dir, ".venv", package_name)
+            # match both .venv_{check} and version-qualified .venv_{check}_py311 etc.
+            for d in glob.glob(os.path.join(venv_pkg_root, f".venv_{check}*")):
+                ISOLATE_DIRS_TO_CLEAN.append(d)
         return CheckResult(package, check, exit_code, duration, stdout, stderr)
 
 
@@ -231,7 +253,16 @@ def summarize(results: List[CheckResult]) -> int:
     return worst
 
 
-async def run_all_checks(packages, checks, max_parallel, wheel_dir, mark_arg: Optional[str], injected_packages: str):
+async def run_all_checks(
+    packages,
+    checks,
+    max_parallel,
+    wheel_dir,
+    mark_arg: Optional[str],
+    injected_packages: str,
+    dest_dir: Optional[str] = None,
+    service: Optional[str] = None,
+):
     """Run all checks for all packages concurrently and return the worst exit code.
 
     :param packages: Iterable of package paths to run checks against.
@@ -282,14 +313,34 @@ async def run_all_checks(packages, checks, max_parallel, wheel_dir, mark_arg: Op
             logger.warning(f"Skipping disabled check {check} for package {package}")
             continue
         logger.info(f"Assigning proxy port {next_proxy_port} to check {check} for package {package}")
-        scheduled.append((package, check, next_proxy_port))
+
+        # Check if this package overrides the Python version for analysis
+        pkg_python_version = get_config_setting(package, "analyze_python_version", None)
+        if pkg_python_version:
+            logger.info(f"Package {package} overrides analyze Python version to {pkg_python_version}")
+
+        scheduled.append((package, check, next_proxy_port, pkg_python_version))
         next_proxy_port += 1
 
     total = len(scheduled)
 
-    for idx, (package, check, proxy_port) in enumerate(scheduled, start=1):
+    for idx, (package, check, proxy_port, pkg_python_version) in enumerate(scheduled, start=1):
         tasks.append(
-            asyncio.create_task(run_check(semaphore, package, check, base_args, idx, total or 1, proxy_port, mark_arg))
+            asyncio.create_task(
+                run_check(
+                    semaphore,
+                    package,
+                    check,
+                    base_args,
+                    idx,
+                    total or 1,
+                    proxy_port,
+                    mark_arg,
+                    dest_dir,
+                    service,
+                    pkg_python_version,
+                )
+            )
         )
 
     # Handle Ctrl+C gracefully
@@ -303,7 +354,7 @@ async def run_all_checks(packages, checks, max_parallel, wheel_dir, mark_arg: Op
         raise
     # Normalize exceptions
     norm_results: List[CheckResult] = []
-    for res, (package, check, _) in zip(results, scheduled):
+    for res, (package, check, _, _) in zip(results, scheduled):
         if isinstance(res, CheckResult):
             norm_results.append(res)
         elif isinstance(res, Exception):
@@ -517,6 +568,8 @@ In the case of an environment invoking `pytest`, results can be collected in a j
     try:
         if in_ci():
             logger.info(f"Ensuring {len(checks)} test proxies are running for requested checks...")
+        # Pass through service if set and not "auto"
+        effective_service = args.service if (args.service and args.service != "auto") else None
         exit_code = asyncio.run(
             run_all_checks(
                 targeted_packages,
@@ -525,6 +578,8 @@ In the case of an environment invoking `pytest`, results can be collected in a j
                 temp_wheel_dir,
                 args.mark_arg,
                 args.injected_packages,
+                args.dest_dir,
+                effective_service,
             )
         )
     except KeyboardInterrupt:

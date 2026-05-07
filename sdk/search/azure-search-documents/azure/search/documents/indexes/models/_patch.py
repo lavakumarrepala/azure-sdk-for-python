@@ -14,13 +14,7 @@ from ._models import SearchIndexerDataSourceConnection as _SearchIndexerDataSour
 from ._models import KnowledgeBase as _KnowledgeBase
 from ._enums import (
     LexicalAnalyzerName,
-    OcrSkillLanguage,
     SearchFieldDataType as _SearchFieldDataType,
-    SplitSkillLanguage,
-    TextTranslationSkillLanguage,
-)
-from ...knowledgebases.models import (
-    KnowledgeRetrievalReasoningEffort,
 )
 
 if TYPE_CHECKING:
@@ -32,7 +26,7 @@ if TYPE_CHECKING:
         SearchIndexerDataIdentity,
         SearchResourceEncryptionKey,
     )
-    from ._enums import IndexerPermissionOption, SearchIndexerDataSourceType
+    from ._enums import SearchIndexerDataSourceType
 
 
 class SearchField(_SearchField):
@@ -93,7 +87,6 @@ class SearchIndexerDataSourceConnection(_SearchIndexerDataSourceConnection):
         container: "SearchIndexerDataContainer",
         description: Optional[str] = None,
         identity: Optional["SearchIndexerDataIdentity"] = None,
-        indexer_permission_options: Optional[List[Union[str, "IndexerPermissionOption"]]] = None,
         data_change_detection_policy: Optional["DataChangeDetectionPolicy"] = None,
         data_deletion_detection_policy: Optional["DataDeletionDetectionPolicy"] = None,
         e_tag: Optional[str] = None,
@@ -110,7 +103,6 @@ class SearchIndexerDataSourceConnection(_SearchIndexerDataSourceConnection):
         container: "SearchIndexerDataContainer",
         description: Optional[str] = None,
         identity: Optional["SearchIndexerDataIdentity"] = None,
-        indexer_permission_options: Optional[List[Union[str, "IndexerPermissionOption"]]] = None,
         data_change_detection_policy: Optional["DataChangeDetectionPolicy"] = None,
         data_deletion_detection_policy: Optional["DataDeletionDetectionPolicy"] = None,
         e_tag: Optional[str] = None,
@@ -129,18 +121,10 @@ class SearchIndexerDataSourceConnection(_SearchIndexerDataSourceConnection):
 
 
 class KnowledgeBase(_KnowledgeBase):
-    """Represents a knowledge base definition.
-
-    This class adds proper deserialization of the retrieval_reasoning_effort field
-    which uses discriminated polymorphism from the knowledgebases models.
-    """
+    """Represents a knowledge base definition."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # Properly deserialize retrieval_reasoning_effort if it's a dict
-        effort = self.retrieval_reasoning_effort
-        if effort is not None and isinstance(effort, dict):
-            self.retrieval_reasoning_effort = KnowledgeRetrievalReasoningEffort._deserialize(effort, [])
 
 
 def _collection_helper(typ: Any) -> str:
@@ -173,11 +157,6 @@ SearchFieldDataType.DateTimeOffset = SearchFieldDataType.DATE_TIME_OFFSET  # typ
 SearchFieldDataType.GeographyPoint = SearchFieldDataType.GEOGRAPHY_POINT  # type: ignore[attr-defined]
 SearchFieldDataType.ComplexType = SearchFieldDataType.COMPLEX  # type: ignore[attr-defined]
 
-# Backward-compatible alias: IS was renamed to IS_ENUM to avoid conflict with Python keyword
-OcrSkillLanguage.IS = OcrSkillLanguage.IS_ENUM  # type: ignore[attr-defined]
-SplitSkillLanguage.IS = SplitSkillLanguage.IS_ENUM  # type: ignore[attr-defined]
-TextTranslationSkillLanguage.IS = TextTranslationSkillLanguage.IS_ENUM  # type: ignore[attr-defined]
-
 
 def Collection(typ: Any) -> str:
     """Helper function to create a collection type string.
@@ -196,7 +175,7 @@ def Collection(typ: Any) -> str:
 def SimpleField(
     *,
     name: str,
-    type: Union[str, _SearchFieldDataType],
+    type: Union[str, SearchFieldDataType],
     key: bool = False,
     hidden: bool = False,
     filterable: bool = False,
@@ -445,15 +424,12 @@ def ComplexField(
 
 __all__: list[str] = [
     "KnowledgeBase",
-    "OcrSkillLanguage",
     "SearchField",
     "SearchFieldDataType",
     "SearchIndexerDataSourceConnection",
     "SimpleField",
     "SearchableField",
     "ComplexField",
-    "SplitSkillLanguage",
-    "TextTranslationSkillLanguage",
 ]  # Add all objects you want publicly available to users at this package level
 
 
